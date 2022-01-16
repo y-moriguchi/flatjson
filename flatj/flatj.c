@@ -425,7 +425,7 @@ char *parse_number(FILE *fp) {
     ungetc(ch, fp);
     result = to_string_buffer();
     sscanf(result, "%lf", &parsed);
-    sprintf(buf, "%g", parsed);
+    sprintf(buf, "%.15g", parsed);
     restring = (char *)malloc(strlen(buf) + 1);
     strcpy(restring, buf);
     free(result);
@@ -442,6 +442,7 @@ char *parse_literal(FILE *fp) {
         if(isalpha(ch = getc(fp))) {
             append_buffer(ch);
         } else {
+            ungetc(ch, fp);
             break;
         }
     }
