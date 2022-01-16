@@ -39,6 +39,14 @@ char *int_to_string(int value) {
     return result;
 }
 
+char *literal_to_string(char *literal) {
+    char *result;
+
+    result = (char *)malloc(strlen(literal) + 1);
+    strcpy(result, literal);
+    return result;
+}
+
 static int buffer_len;
 static char *buffer = NULL;
 static char *buffer_ptr;
@@ -496,6 +504,9 @@ int parse_object(FILE *fp) {
 
         case PARSE_OBJECT_KEY:
             if(ch == '}') {
+                push_stack(literal_to_string("{}"));
+                print_stack(fpout);
+                pop_stack();
                 return 1;
             } else {
                 ungetc(ch, fp);
@@ -569,6 +580,9 @@ int parse_array(FILE *fp) {
 
         case PARSE_ARRAY_LIST:
             if(ch == ']') {
+                push_stack(literal_to_string("[]"));
+                print_stack(fpout);
+                pop_stack();
                 return 1;
             } else {
                 ungetc(ch, fp);
