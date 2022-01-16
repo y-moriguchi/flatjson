@@ -110,13 +110,14 @@ typedef struct list {
 
 static stack_list *stack = NULL;
 static stack_list *stack_ptr;
+static char separator = ':';
 
 void print_stack(FILE *fpout) {
     stack_list *p;
 
     for(p = stack; p != NULL; p = p->next) {
         if(p != stack) {
-            fprintf(fpout, ":");
+            fprintf(fpout, "%c", separator);
         }
         fprintf(fpout, "%s", p->value);
     }
@@ -170,7 +171,7 @@ enum state_parse_string {
     PARSE_STRING_CODEPOINT
 };
 
-char *parse_string(FILE *fp) {
+char *parse_string(FILE *fp, int quote) {
     enum state_parse_string state = PARSE_STRING_INIT;
     char ch;
     int codepoint, codepoint_count;
@@ -187,7 +188,9 @@ char *parse_string(FILE *fp) {
         switch(state) {
         case PARSE_STRING_INIT:
             if(ch == '\"') {
-                append_buffer('`');
+                if(quote > 0) {
+                    append_buffer(quote);
+                }
                 state = PARSE_STRING_STRING;
             } else {
                 ungetc(ch, fp);
@@ -197,11 +200,16 @@ char *parse_string(FILE *fp) {
 
         case PARSE_STRING_STRING:
             if(ch == '\"') {
-                append_buffer('`');
+                if(quote > 0) {
+                    append_buffer(quote);
+                }
                 return to_string_buffer();
             } else if(ch == '\\') {
                 state = PARSE_STRING_BACKSLASH;
             } else if(ch != '\n') {
+                if(ch == '#') {
+                    append_buffer('\\');
+                }
                 append_buffer(ch);
             }
             break;
@@ -489,7 +497,7 @@ int parse_object(FILE *fp) {
                 return 1;
             } else {
                 ungetc(ch, fp);
-                if((str = parse_string(fp)) != NULL) {
+                if((str = parse_string(fp, -1)) != NULL) {
                     push_stack(str);
                     state = PARSE_OBJECT_NEXT;
                 } else {
@@ -598,7 +606,7 @@ int parse_json(FILE *fp) {
         /* ok */
     } else if(parse_array(fp)) {
         /* ok */
-    } else if((result = parse_string(fp)) != NULL || (result = parse_number(fp)) != NULL || (result = parse_literal(fp)) != NULL) {
+    } else if((result = parse_string(fp, '`')) != NULL || (result = parse_number(fp)) != NULL || (result = parse_literal(fp)) != NULL) {
         push_stack(result);
         print_stack(fpout);
         pop_stack();
@@ -646,6 +654,14 @@ int main(int argc, char *argv[]) {
             }
             fpout = openfile(argv[argindex + 1], "w");
             outputflg = 1;
+            argindex += 2;
+        } else if(strcmp(argv[argindex], "-F") == 0) {
+            if(argindex + 1 >= argc) {
+                usage();
+            } else if(strlen(argv[argindex + 1]) == 0) {
+                usage();
+            }
+            separator = argv[argindex + 1][0];
             argindex += 2;
         } else {
             break;
