@@ -27,11 +27,13 @@ void throw() {
     longjmp(top, EXIT_EXCEPTION);
 }
 
+int number_prefix = '#';
+
 char *int_to_string(int value) {
     char buf[50];
     char *result;
 
-    sprintf(buf, "#%d", value);
+    sprintf(buf, "%c%d", number_prefix, value);
     result = (char *)malloc(strlen(buf) + 1);
     strcpy(result, buf);
     return result;
@@ -207,7 +209,7 @@ char *parse_string(FILE *fp, int quote) {
             } else if(ch == '\\') {
                 state = PARSE_STRING_BACKSLASH;
             } else if(ch != '\n') {
-                if(ch == '#') {
+                if(ch == number_prefix) {
                     append_buffer('\\');
                 }
                 append_buffer(ch);
@@ -636,7 +638,7 @@ FILE *openfile(char *filename, char *mode) {
     FILE *result;
 
     if((result = fopen(filename, mode)) == NULL) {
-        fprintf(stderr, "cannat open file %s\n", filename);
+        fprintf(stderr, "cannot open file %s\n", filename);
         exit(EXIT_EXCEPTION);
     }
     return result;
@@ -662,6 +664,14 @@ int main(int argc, char *argv[]) {
                 usage();
             }
             separator = argv[argindex + 1][0];
+            argindex += 2;
+        } else if(strcmp(argv[argindex], "-n") == 0) {
+            if(argindex + 1 >= argc) {
+                usage();
+            } else if(strlen(argv[argindex + 1]) == 0) {
+                usage();
+            }
+            number_prefix = argv[argindex + 1][0];
             argindex += 2;
         } else {
             break;
