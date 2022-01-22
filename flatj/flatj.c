@@ -14,6 +14,7 @@
 #include <setjmp.h>
 
 #define INIT_STRING_LENGTH 20
+#define EXIT_ERROR 8
 #define EXIT_EXCEPTION 4
 #define EXIT_USAGE 2
 
@@ -27,14 +28,24 @@ void throw() {
     longjmp(top, EXIT_EXCEPTION);
 }
 
-int number_prefix = '#';
+void *xalloc(int size) {
+    void *result;
+
+    if((result = malloc(size)) == NULL) {
+        fprintf(stderr, "Out of memory\n");
+        exit(EXIT_ERROR);
+    }
+    return result;
+}
+
+static char index_prefix = '#';
 
 char *int_to_string(int value) {
     char buf[50];
     char *result;
 
-    sprintf(buf, "%c%d", number_prefix, value);
-    result = (char *)malloc(strlen(buf) + 1);
+    sprintf(buf, "%c%d", index_prefix, value);
+    result = (char *)xalloc(strlen(buf) + 1);
     strcpy(result, buf);
     return result;
 }
@@ -42,7 +53,7 @@ char *int_to_string(int value) {
 char *literal_to_string(char *literal) {
     char *result;
 
-    result = (char *)malloc(strlen(literal) + 1);
+    result = (char *)xalloc(strlen(literal) + 1);
     strcpy(result, literal);
     return result;
 }
@@ -55,7 +66,7 @@ void init_buffer() {
     if(buffer != NULL) {
         free(buffer);
     }
-    buffer = buffer_ptr = (char *)malloc(INIT_STRING_LENGTH);
+    buffer = buffer_ptr = (char *)xalloc(INIT_STRING_LENGTH);
     buffer_len = INIT_STRING_LENGTH;
 }
 
@@ -64,34 +75,13 @@ void append_buffer(char ch) {
 
     if(buffer_ptr - buffer >= buffer_len - 1) {
         tmp = buffer;
-        buffer = (char *)malloc(buffer_len * 2);
+        buffer = (char *)xalloc(buffer_len * 2);
         memcpy(buffer, tmp, (buffer_ptr - tmp) * sizeof(char));
         buffer_ptr = buffer + buffer_len - 1;
         buffer_len *= 2;
         free(tmp);
     }
     *buffer_ptr++ = ch;
-}
-
-void append_codepoint_buffer(int codepoint) {
-    if(codepoint < 0x80) {
-        append_buffer((char)codepoint);
-    } else if(codepoint < 0x800) {
-        append_buffer(0xd0 | (codepoint >> 6));
-        append_buffer(0x80 | (codepoint & 0x03f));
-    } else if(codepoint < 0x10000) {
-        append_buffer(0xe0 | (codepoint >> 12));
-        append_buffer(0x80 | ((codepoint >> 6) & 0x3f));
-        append_buffer(0x80 | (codepoint & 0x3f));
-    } else if(codepoint < 0x110000) {
-        append_buffer(0xf0 | (codepoint >> 18));
-        append_buffer(0x80 | ((codepoint >> 12) & 0x3f));
-        append_buffer(0x80 | ((codepoint >> 6) & 0x3f));
-        append_buffer(0x80 | (codepoint & 0x3f));
-    } else {
-        fprintf(stderr, "invalid codepoint\n");
-        throw();
-    }
 }
 
 int equals_buffer(const char *str) {
@@ -107,7 +97,7 @@ char *to_string_buffer() {
     char *result;
 
     append_buffer('\0');
-    result = (char *)malloc(buffer_ptr - buffer);
+    result = (char *)xalloc(buffer_ptr - buffer);
     strcpy(result, buffer);
     return result;
 }
@@ -131,11 +121,14 @@ void print_stack(FILE *fpout) {
         }
         fprintf(fpout, "%s", p->value);
     }
+    if(separator == '\n') {
+        fprintf(fpout, "\n");
+    }
     fprintf(fpout, "\n");
 }
 
 void push_stack(char *str) {
-    stack_list *element = malloc(sizeof(stack_list));
+    stack_list *element = xalloc(sizeof(stack_list));
 
     element->value = str;
     element->next = NULL;
@@ -174,6 +167,7 @@ char nextchar(FILE *fp) {
     return ch;
 }
 
+static int suffix_char = '!';
 enum state_parse_string {
     PARSE_STRING_INIT,
     PARSE_STRING_STRING,
@@ -181,10 +175,10 @@ enum state_parse_string {
     PARSE_STRING_CODEPOINT
 };
 
-char *parse_string(FILE *fp, int quote) {
+char *parse_string(FILE *fp, int suffix) {
     enum state_parse_string state = PARSE_STRING_INIT;
     char ch;
-    int codepoint, codepoint_count;
+    int codepoint_count;
 
     ch = nextchar(fp);
     ungetc(ch, fp);
@@ -198,9 +192,6 @@ char *parse_string(FILE *fp, int quote) {
         switch(state) {
         case PARSE_STRING_INIT:
             if(ch == '\"') {
-                if(quote > 0) {
-                    append_buffer(quote);
-                }
                 state = PARSE_STRING_STRING;
             } else {
                 ungetc(ch, fp);
@@ -210,16 +201,13 @@ char *parse_string(FILE *fp, int quote) {
 
         case PARSE_STRING_STRING:
             if(ch == '\"') {
-                if(quote > 0) {
-                    append_buffer(quote);
+                if(suffix >= 0) {
+                    append_buffer((char)suffix);
                 }
                 return to_string_buffer();
             } else if(ch == '\\') {
                 state = PARSE_STRING_BACKSLASH;
             } else if(ch != '\n') {
-                if(ch == number_prefix) {
-                    append_buffer('\\');
-                }
                 append_buffer(ch);
             }
             break;
@@ -230,39 +218,15 @@ char *parse_string(FILE *fp, int quote) {
                 append_buffer(ch);
                 state = PARSE_STRING_STRING;
                 break;
-            case '\\':
+            case '\\': case 'b': case 'f': case 'n': case 'r': case 't':
                 append_buffer('\\');
                 append_buffer(ch);
                 state = PARSE_STRING_STRING;
                 break;
-            case 'b':
-                append_buffer('\\');
-                append_buffer('b');
-                state = PARSE_STRING_STRING;
-                break;
-            case 'f':
-                append_buffer('\\');
-                append_buffer('f');
-                state = PARSE_STRING_STRING;
-                break;
-            case 'n':
-                append_buffer('\\');
-                append_buffer('n');
-                state = PARSE_STRING_STRING;
-                break;
-            case 'r':
-                append_buffer('\\');
-                append_buffer('r');
-                state = PARSE_STRING_STRING;
-                break;
-            case 't':
-                append_buffer('\\');
-                append_buffer('t');
-                state = PARSE_STRING_STRING;
-                break;
             case 'u':
-                codepoint = 0;
                 codepoint_count = 0;
+                append_buffer('\\');
+                append_buffer(ch);
                 state = PARSE_STRING_CODEPOINT;
                 break;
             default:
@@ -275,11 +239,11 @@ char *parse_string(FILE *fp, int quote) {
         case PARSE_STRING_CODEPOINT:
             if(codepoint_count < 4) {
                 if(isdigit(ch)) {
-                    codepoint = (codepoint << 4) + (ch - '0');
+                    append_buffer(ch);
                 } else if(ch >= 'A' && ch <= 'F') {
-                    codepoint = (codepoint << 4) + ((ch - 'A') + 10);
+                    append_buffer(ch);
                 } else if(ch >= 'a' && ch <= 'f') {
-                    codepoint = (codepoint << 4) + ((ch - 'a') + 10);
+                    append_buffer(ch);
                 } else {
                     fprintf(stderr, "invalid escape sequence\n");
                     throw();
@@ -287,7 +251,6 @@ char *parse_string(FILE *fp, int quote) {
                 codepoint_count++;
             } else {
                 ungetc(ch, fp);
-                append_codepoint_buffer(codepoint);
                 state = PARSE_STRING_STRING;
             }
         }
@@ -441,13 +404,7 @@ char *parse_number(FILE *fp) {
 
     matched:
     ungetc(ch, fp);
-    result = to_string_buffer();
-    sscanf(result, "%lf", &parsed);
-    sprintf(buf, "%.15g", parsed);
-    restring = (char *)malloc(strlen(buf) + 1);
-    strcpy(restring, buf);
-    free(result);
-    return restring;
+    return to_string_buffer();
 }
 
 char *parse_literal(FILE *fp) {
@@ -476,6 +433,7 @@ char *parse_literal(FILE *fp) {
 
 enum state_parse_object {
     PARSE_OBJECT_INIT,
+    PARSE_OBJECT_KEY_INIT,
     PARSE_OBJECT_KEY,
     PARSE_OBJECT_NEXT,
     PARSE_OBJECT_RESULT
@@ -495,14 +453,14 @@ int parse_object(FILE *fp) {
         switch(state) {
         case PARSE_OBJECT_INIT:
             if(ch == '{') {
-                state = PARSE_OBJECT_KEY;
+                state = PARSE_OBJECT_KEY_INIT;
             } else {
                 ungetc(ch, fp);
                 return 0;
             }
             break;
 
-        case PARSE_OBJECT_KEY:
+        case PARSE_OBJECT_KEY_INIT:
             if(ch == '}') {
                 push_stack(literal_to_string("{}"));
                 print_stack(fpout);
@@ -517,6 +475,17 @@ int parse_object(FILE *fp) {
                     fprintf(stderr, "string needed\n");
                     throw();
                 }
+            }
+            break;
+
+        case PARSE_OBJECT_KEY:
+            ungetc(ch, fp);
+            if((str = parse_string(fp, -1)) != NULL) {
+                push_stack(str);
+                state = PARSE_OBJECT_NEXT;
+            } else {
+                fprintf(stderr, "string needed\n");
+                throw();
             }
             break;
 
@@ -553,6 +522,7 @@ int parse_object(FILE *fp) {
 
 enum state_parse_array {
     PARSE_ARRAY_INIT,
+    PARSE_ARRAY_LIST_INIT,
     PARSE_ARRAY_LIST,
     PARSE_ARRAY_RESULT
 };
@@ -571,14 +541,14 @@ int parse_array(FILE *fp) {
         switch(state) {
         case PARSE_ARRAY_INIT:
             if(ch == '[') {
-                state = PARSE_ARRAY_LIST;
+                state = PARSE_ARRAY_LIST_INIT;
             } else {
                 ungetc(ch, fp);
                 return 0;
             }
             break;
 
-        case PARSE_ARRAY_LIST:
+        case PARSE_ARRAY_LIST_INIT:
             if(ch == ']') {
                 push_stack(literal_to_string("[]"));
                 print_stack(fpout);
@@ -591,6 +561,14 @@ int parse_array(FILE *fp) {
                 pop_stack();
                 state = PARSE_ARRAY_RESULT;
             }
+            break;
+
+        case PARSE_ARRAY_LIST:
+            ungetc(ch, fp);
+            push_stack(int_to_string(index++));
+            parse_json(fp);
+            pop_stack();
+            state = PARSE_ARRAY_RESULT;
             break;
 
         case PARSE_ARRAY_RESULT:
@@ -622,7 +600,7 @@ int parse_json(FILE *fp) {
         /* ok */
     } else if(parse_array(fp)) {
         /* ok */
-    } else if((result = parse_string(fp, '`')) != NULL || (result = parse_number(fp)) != NULL || (result = parse_literal(fp)) != NULL) {
+    } else if((result = parse_string(fp, suffix_char)) != NULL || (result = parse_number(fp)) != NULL || (result = parse_literal(fp)) != NULL) {
         push_stack(result);
         print_stack(fpout);
         pop_stack();
@@ -644,7 +622,11 @@ void parse_json_root(FILE *fp) {
 }
 
 void usage() {
-    fprintf(stderr, "usage: flatj [-o output] [input]\n");
+    fprintf(stderr, "usage: flatj [option] [-o output] [input]\n");
+    fprintf(stderr, "option:\n");
+    fprintf(stderr, "-F delimiter\n");
+    fprintf(stderr, "-i index-prefix\n");
+    fprintf(stderr, "-s string-suffix\n");
     exit(EXIT_USAGE);
 }
 
@@ -658,9 +640,65 @@ FILE *openfile(char *filename, char *mode) {
     return result;
 }
 
+char *get_delimiter_arg(int argc, char *argv[], char *arg_string, int *argindex) {
+    int nowindex = *argindex;
+
+    if(strcmp(argv[nowindex], arg_string) == 0) {
+        if(nowindex + 1 >= argc) {
+            usage();
+        }
+        *argindex += 2;
+        return argv[nowindex + 1];
+    } else if(strncmp(argv[nowindex], arg_string, strlen(arg_string)) == 0) {
+        *argindex += 1;
+        return argv[nowindex] + strlen(arg_string);
+    } else {
+        return NULL;
+    }
+}
+
+int get_ascii_arg(int argc, char *argv[], char *arg_string, int escape, int *argindex) {
+    char *getarg;
+
+    if((getarg = get_delimiter_arg(argc, argv, arg_string, argindex)) == NULL) {
+        return -1;
+    } else if(strlen(getarg) == 0) {
+        usage();
+        return -1;
+    } else if(!isascii(getarg[0])) {
+        usage();
+        return -1;
+    } else if(getarg[0] == escape && strlen(getarg) >= 2) {
+        if(getarg[1] == 'n') {
+            return '\n';
+        } else if(getarg[1] == 't') {
+            return '\t';
+        } else {
+            return getarg[0];
+        }
+    } else {
+        return getarg[0];
+    }
+}
+
+int get_ascii_optional_arg(int argc, char *argv[], char *arg_string, int *argindex) {
+    char *getarg;
+
+    if((getarg = get_delimiter_arg(argc, argv, arg_string, argindex)) == NULL) {
+        return -2;
+    } else if(strlen(getarg) == 0) {
+        return -1;
+    } else if(!isascii(getarg[0])) {
+        usage();
+        return -2;
+    } else {
+        return getarg[0];
+    }
+}
+
 int main(int argc, char *argv[]) {
     FILE *input = NULL;
-    int argindex = 1, errcode = 0, outputflg = 0;
+    int argindex = 1, errcode = 0, outputflg = 0, argch;
 
     fpout = stdout;
     while(argindex < argc) {
@@ -671,22 +709,14 @@ int main(int argc, char *argv[]) {
             fpout = openfile(argv[argindex + 1], "w");
             outputflg = 1;
             argindex += 2;
-        } else if(strcmp(argv[argindex], "-F") == 0) {
-            if(argindex + 1 >= argc) {
-                usage();
-            } else if(strlen(argv[argindex + 1]) == 0) {
-                usage();
-            }
-            separator = argv[argindex + 1][0];
-            argindex += 2;
-        } else if(strcmp(argv[argindex], "-n") == 0) {
-            if(argindex + 1 >= argc) {
-                usage();
-            } else if(strlen(argv[argindex + 1]) == 0) {
-                usage();
-            }
-            number_prefix = argv[argindex + 1][0];
-            argindex += 2;
+        } else if((argch = get_ascii_arg(argc, argv, "-F", '\\', &argindex)) >= 0) {
+            separator = (char)argch;
+        } else if((argch = get_ascii_arg(argc, argv, "-i", -1, &argindex)) >= 0) {
+            index_prefix = (char)argch;
+        } else if((argch = get_ascii_optional_arg(argc, argv, "-s", &argindex)) >= -1) {
+            suffix_char = argch;
+        } else if(argv[argindex][0] == '-') {
+            usage();
         } else {
             break;
         }
