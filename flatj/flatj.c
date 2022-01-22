@@ -167,6 +167,13 @@ char nextchar(FILE *fp) {
     return ch;
 }
 
+char nextcharline(FILE *fp) {
+    char ch;
+
+    while((ch = getc(fp)) == ' ' || ch == '\t' || ch == '\r');
+    return ch;
+}
+
 static int suffix_char = '!';
 enum state_parse_string {
     PARSE_STRING_INIT,
@@ -621,8 +628,29 @@ void parse_json_root(FILE *fp) {
     }
 }
 
+void parse_jsonl_root(FILE *fp) {
+    int index = 0;
+    char ch;
+
+    while(1) {
+        if((ch = nextchar(fp)) == EOF) {
+            return;
+        }
+        ungetc(ch, fp);
+        push_stack(int_to_string(index++));
+        parse_json(fp);
+        pop_stack();
+        if((ch = nextcharline(fp)) == EOF) {
+            return;
+        } else if(ch != '\n') {
+            fprintf(stderr, "newline or EOF required\n");
+            throw();
+        }
+    }
+}
+
 void usage() {
-    fprintf(stderr, "usage: flatj [option] [-o output] [input]\n");
+    fprintf(stderr, "usage: flatj [option] [-l] [-o output] [input]\n");
     fprintf(stderr, "option:\n");
     fprintf(stderr, "-F delimiter\n");
     fprintf(stderr, "-i index-prefix\n");
@@ -699,6 +727,7 @@ int get_ascii_optional_arg(int argc, char *argv[], char *arg_string, int *argind
 int main(int argc, char *argv[]) {
     FILE *input = NULL;
     int argindex = 1, errcode = 0, outputflg = 0, argch;
+    void (*parse_function)(FILE *fp) = parse_json_root;
 
     fpout = stdout;
     while(argindex < argc) {
@@ -715,6 +744,9 @@ int main(int argc, char *argv[]) {
             index_prefix = (char)argch;
         } else if((argch = get_ascii_optional_arg(argc, argv, "-s", &argindex)) >= -1) {
             suffix_char = argch;
+        } else if(strcmp(argv[argindex], "-l") == 0) {
+            parse_function = parse_jsonl_root;
+            argindex++;
         } else if(argv[argindex][0] == '-') {
             usage();
         } else {
@@ -724,12 +756,12 @@ int main(int argc, char *argv[]) {
 
     if(argindex == argc) {
         if((errcode = setjmp(top)) == 0) {
-            parse_json_root(stdin);
+            parse_function(stdin);
         }
     } else {
         input = openfile(argv[argindex], "r");
         if((errcode = setjmp(top)) == 0) {
-            parse_json_root(input);
+            parse_function(input);
         }
         fclose(input);
         return errcode;
