@@ -12,11 +12,9 @@
 #include <ctype.h>
 #include <math.h>
 #include <setjmp.h>
+#include "../common.h"
 
 #define INIT_STRING_LENGTH 20
-#define EXIT_ERROR 8
-#define EXIT_EXCEPTION 4
-#define EXIT_USAGE 2
 
 static FILE *fpout;
 
@@ -28,14 +26,10 @@ void throw() {
     longjmp(top, EXIT_EXCEPTION);
 }
 
-void *xalloc(int size) {
-    void *result;
+int surrogate_to_codepoint(int high, int low) {
+    int h = high - 0xD800, l = low - 0xDC00;
 
-    if((result = malloc(size)) == NULL) {
-        fprintf(stderr, "Out of memory\n");
-        exit(EXIT_ERROR);
-    }
-    return result;
+    return (h << 10) + l + 0x10000;
 }
 
 static char index_prefix = '#';
@@ -102,6 +96,27 @@ char *to_string_buffer() {
     return result;
 }
 
+void append_codepoint_buffer(int codepoint) {
+    if(codepoint < 0x80) {
+        append_buffer((char)codepoint);
+    } else if(codepoint < 0x800) {
+        append_buffer(0xd0 | (codepoint >> 6));
+        append_buffer(0x80 | (codepoint & 0x03f));
+    } else if(codepoint < 0x10000) {
+        append_buffer(0xe0 | (codepoint >> 12));
+        append_buffer(0x80 | ((codepoint >> 6) & 0x3f));
+        append_buffer(0x80 | (codepoint & 0x3f));
+    } else if(codepoint < 0x110000) {
+        append_buffer(0xf0 | (codepoint >> 18));
+        append_buffer(0x80 | ((codepoint >> 12) & 0x3f));
+        append_buffer(0x80 | ((codepoint >> 6) & 0x3f));
+        append_buffer(0x80 | (codepoint & 0x3f));
+    } else {
+        fprintf(stderr, "invalid codepoint\n");
+        throw();
+    }
+}
+
 typedef struct list {
     char *value;
     struct list *next;
@@ -160,21 +175,22 @@ void pop_stack() {
     free(ptr);
 }
 
-char nextchar(FILE *fp) {
-    char ch;
+int nextchar(FILE *fp) {
+    int ch;
 
     while((ch = getc(fp)) == ' ' || ch == '\t' || ch == '\n' || ch == '\r');
     return ch;
 }
 
-char nextcharline(FILE *fp) {
-    char ch;
+int nextcharline(FILE *fp) {
+    int ch;
 
     while((ch = getc(fp)) == ' ' || ch == '\t' || ch == '\r');
     return ch;
 }
 
 static int suffix_char = '!';
+static int expand_escape = 0;
 enum state_parse_string {
     PARSE_STRING_INIT,
     PARSE_STRING_STRING,
@@ -184,8 +200,7 @@ enum state_parse_string {
 
 char *parse_string(FILE *fp, int suffix) {
     enum state_parse_string state = PARSE_STRING_INIT;
-    char ch;
-    int codepoint_count;
+    int ch, codepoint, codepoint_count, surrogate = 0;
 
     ch = nextchar(fp);
     ungetc(ch, fp);
@@ -207,19 +222,30 @@ char *parse_string(FILE *fp, int suffix) {
             break;
 
         case PARSE_STRING_STRING:
+            if(ch != '\\' && surrogate) {
+                fprintf(stderr, "invalid surrogate pair\n");
+                throw();
+            }
             if(ch == '\"') {
-                if(suffix >= 0) {
+                if(surrogate) {
+                    fprintf(stderr, "invalid surrogate pair\n");
+                    throw();
+                } else if(suffix >= 0) {
                     append_buffer((char)suffix);
                 }
                 return to_string_buffer();
             } else if(ch == '\\') {
                 state = PARSE_STRING_BACKSLASH;
-            } else if(ch != '\n') {
+            } else if(ch >= 0x20) {
                 append_buffer(ch);
             }
             break;
 
         case PARSE_STRING_BACKSLASH:
+            if(ch != 'u' && surrogate) {
+                fprintf(stderr, "invalid surrogate pair\n");
+                throw();
+            }
             switch(ch) {
             case '\"':  case '/':
                 append_buffer(ch);
@@ -231,9 +257,12 @@ char *parse_string(FILE *fp, int suffix) {
                 state = PARSE_STRING_STRING;
                 break;
             case 'u':
+                codepoint = 0;
                 codepoint_count = 0;
-                append_buffer('\\');
-                append_buffer(ch);
+                if(!expand_escape) {
+                    append_buffer('\\');
+                    append_buffer(ch);
+                }
                 state = PARSE_STRING_CODEPOINT;
                 break;
             default:
@@ -246,17 +275,37 @@ char *parse_string(FILE *fp, int suffix) {
         case PARSE_STRING_CODEPOINT:
             if(codepoint_count < 4) {
                 if(isdigit(ch)) {
-                    append_buffer(ch);
+                    codepoint = (codepoint << 4) + (ch - '0');
                 } else if(ch >= 'A' && ch <= 'F') {
-                    append_buffer(ch);
+                    codepoint = (codepoint << 4) + ((ch - 'A') + 10);
                 } else if(ch >= 'a' && ch <= 'f') {
-                    append_buffer(ch);
+                    codepoint = (codepoint << 4) + ((ch - 'a') + 10);
                 } else {
                     fprintf(stderr, "invalid escape sequence\n");
                     throw();
                 }
+                if(!expand_escape) {
+                    append_buffer(ch);
+                }
                 codepoint_count++;
             } else {
+                if(surrogate) {
+                    if(codepoint >= 0xDC00 && codepoint <= 0xDFFF) {
+                        if(expand_escape) {
+                            append_codepoint_buffer(surrogate_to_codepoint(surrogate, codepoint));
+                        }
+                        surrogate = 0;
+                    } else {
+                        fprintf(stderr, "invalid surrogate pair\n");
+                        throw();
+                    }
+                } else {
+                    if(codepoint >= 0xD800 && codepoint <= 0xDCFF) {
+                        surrogate = codepoint;
+                    } else if(expand_escape) {
+                        append_codepoint_buffer(codepoint);
+                    }
+                }
                 ungetc(ch, fp);
                 state = PARSE_STRING_STRING;
             }
@@ -281,7 +330,8 @@ enum state_parse_number {
 
 char *parse_number(FILE *fp) {
     enum state_parse_number state = PARSE_NUMBER_INIT;
-    char ch, *result, *restring, buf[256];
+    int ch;
+    char *result, *restring, buf[256];
     double parsed;
 
     ch = nextchar(fp);
@@ -415,7 +465,7 @@ char *parse_number(FILE *fp) {
 }
 
 char *parse_literal(FILE *fp) {
-    char ch;
+    int ch;
 
     ch = nextchar(fp);
     ungetc(ch, fp);
@@ -448,7 +498,7 @@ enum state_parse_object {
 
 int parse_object(FILE *fp) {
     enum state_parse_object state = PARSE_OBJECT_INIT;
-    char ch;
+    int ch;
     char *str;
 
     while(1) {
@@ -536,8 +586,7 @@ enum state_parse_array {
 
 int parse_array(FILE *fp) {
     enum state_parse_array state = PARSE_ARRAY_INIT;
-    char ch;
-    int index = 0;
+    int ch, index = 0;
 
     while(1) {
         if((ch = nextchar(fp)) == EOF) {
@@ -619,7 +668,7 @@ int parse_json(FILE *fp) {
 }
 
 void parse_json_root(FILE *fp) {
-    char ch;
+    int ch;
 
     parse_json(fp);
     if((ch = nextchar(fp)) != EOF) {
@@ -628,29 +677,8 @@ void parse_json_root(FILE *fp) {
     }
 }
 
-void parse_jsonl_root(FILE *fp) {
-    int index = 0;
-    char ch;
-
-    while(1) {
-        if((ch = nextchar(fp)) == EOF) {
-            return;
-        }
-        ungetc(ch, fp);
-        push_stack(int_to_string(index++));
-        parse_json(fp);
-        pop_stack();
-        if((ch = nextcharline(fp)) == EOF) {
-            return;
-        } else if(ch != '\n') {
-            fprintf(stderr, "newline or EOF required\n");
-            throw();
-        }
-    }
-}
-
 void usage() {
-    fprintf(stderr, "usage: flatj [option] [-l] [-o output] [input]\n");
+    fprintf(stderr, "usage: flatj [option] [-E] [-o output] [input]\n");
     fprintf(stderr, "option:\n");
     fprintf(stderr, "-F delimiter\n");
     fprintf(stderr, "-i index-prefix\n");
@@ -658,76 +686,10 @@ void usage() {
     exit(EXIT_USAGE);
 }
 
-FILE *openfile(char *filename, char *mode) {
-    FILE *result;
-
-    if((result = fopen(filename, mode)) == NULL) {
-        fprintf(stderr, "cannot open file %s\n", filename);
-        exit(EXIT_EXCEPTION);
-    }
-    return result;
-}
-
-char *get_delimiter_arg(int argc, char *argv[], char *arg_string, int *argindex) {
-    int nowindex = *argindex;
-
-    if(strcmp(argv[nowindex], arg_string) == 0) {
-        if(nowindex + 1 >= argc) {
-            usage();
-        }
-        *argindex += 2;
-        return argv[nowindex + 1];
-    } else if(strncmp(argv[nowindex], arg_string, strlen(arg_string)) == 0) {
-        *argindex += 1;
-        return argv[nowindex] + strlen(arg_string);
-    } else {
-        return NULL;
-    }
-}
-
-int get_ascii_arg(int argc, char *argv[], char *arg_string, int escape, int *argindex) {
-    char *getarg;
-
-    if((getarg = get_delimiter_arg(argc, argv, arg_string, argindex)) == NULL) {
-        return -1;
-    } else if(strlen(getarg) == 0) {
-        usage();
-        return -1;
-    } else if(!isascii(getarg[0])) {
-        usage();
-        return -1;
-    } else if(getarg[0] == escape && strlen(getarg) >= 2) {
-        if(getarg[1] == 'n') {
-            return '\n';
-        } else if(getarg[1] == 't') {
-            return '\t';
-        } else {
-            return getarg[0];
-        }
-    } else {
-        return getarg[0];
-    }
-}
-
-int get_ascii_optional_arg(int argc, char *argv[], char *arg_string, int *argindex) {
-    char *getarg;
-
-    if((getarg = get_delimiter_arg(argc, argv, arg_string, argindex)) == NULL) {
-        return -2;
-    } else if(strlen(getarg) == 0) {
-        return -1;
-    } else if(!isascii(getarg[0])) {
-        usage();
-        return -2;
-    } else {
-        return getarg[0];
-    }
-}
-
 int main(int argc, char *argv[]) {
     FILE *input = NULL;
-    int argindex = 1, errcode = 0, outputflg = 0, argch;
-    void (*parse_function)(FILE *fp) = parse_json_root;
+    int argindex = 1, errcode = 0, argch;
+    char *outfile = NULL;
 
     fpout = stdout;
     while(argindex < argc) {
@@ -735,17 +697,16 @@ int main(int argc, char *argv[]) {
             if(argindex + 1 >= argc) {
                 usage();
             }
-            fpout = openfile(argv[argindex + 1], "w");
-            outputflg = 1;
+            outfile = argv[argindex + 1];
             argindex += 2;
-        } else if((argch = get_ascii_arg(argc, argv, "-F", '\\', &argindex)) >= 0) {
+        } else if((argch = get_ascii_arg(argc, argv, "-F", '\\', usage, &argindex)) >= 0) {
             separator = (char)argch;
-        } else if((argch = get_ascii_arg(argc, argv, "-i", -1, &argindex)) >= 0) {
+        } else if((argch = get_ascii_arg(argc, argv, "-i", -1, usage, &argindex)) >= 0) {
             index_prefix = (char)argch;
-        } else if((argch = get_ascii_optional_arg(argc, argv, "-s", &argindex)) >= -1) {
+        } else if((argch = get_ascii_optional_arg(argc, argv, "-s", usage, &argindex)) >= -1) {
             suffix_char = argch;
-        } else if(strcmp(argv[argindex], "-l") == 0) {
-            parse_function = parse_jsonl_root;
+        } else if(strcmp(argv[argindex], "-E") == 0) {
+            expand_escape = 1;
             argindex++;
         } else if(argv[argindex][0] == '-') {
             usage();
@@ -754,19 +715,22 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    if(outfile != NULL) {
+        fpout = openfile(outfile, "w");
+    }
+
     if(argindex == argc) {
         if((errcode = setjmp(top)) == 0) {
-            parse_function(stdin);
+            parse_json_root(stdin);
         }
     } else {
         input = openfile(argv[argindex], "r");
         if((errcode = setjmp(top)) == 0) {
-            parse_function(input);
+            parse_json_root(input);
         }
         fclose(input);
-        return errcode;
     }
-    if(outputflg) {
+    if(outfile != NULL) {
         fclose(fpout);
     }
     return errcode;
