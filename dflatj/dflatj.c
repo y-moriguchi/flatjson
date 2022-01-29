@@ -418,10 +418,10 @@ int main(int argc, char *argv[]) {
         }
         fclose(input);
     }
+    fprintf(fpout, "\n");
     if(outfile != NULL) {
         fclose(fpout);
     }
-    fprintf(fpout, "\n");
     return errcode;
 }
 
