@@ -1,0 +1,41 @@
+.TH FLATJ 1 2022-01-30 "" "Flat JSON User's Manual"
+.SH NAME
+flatj \- flats JSON file
+.SH SYNOPSIS
+.B flatj
+.RB [ \-o
+.IR output-file ]
+.RB [ \-F
+.IR defimiter ]
+.RB [ \-i
+.IR index-prefix ]
+.RB [ \-s
+.IR string-suffix ]
+.RB [ \-E ]
+.I [ input-file ]
+.SH DESCRIPTION
+.B flatj
+flats JSON file. If index-prefix is specified, the prefix is added beginning of index.
+If string-suffix is specified, the suffix is added end of string value.
+.br
+Output of flatj is list of object key or array index and succeeds value.
+The value is number, 'null', 'true', 'false', and string ended by string-suffix.
+The string-suffix can be empty.
+.SH OPTION
+.B \-\^F " delimiter"
+Specify one character of delimiter. The default is ':'.
+.TP
+.B \-\^i " index-prefix"
+Specify index prefix added beginning of array index. The default is '#'.
+.TP
+.B \-\^s " string-suffix"
+Specify suffix added end of string value. The default is '!'.
+.TP
+.B \-\^E
+Expand escape sequence to its character.
+.TP
+.SH NOTES
+The input of flatj must be encoded by UTF-8.
+.SH "SEE ALSO"
+dflatj(1), fmj(1)
+
