@@ -13,8 +13,6 @@
 #include <setjmp.h>
 #include "../common.h"
 
-#define INIT_STRING_LENGTH 20
-
 static jmp_buf top;
 
 void throw() {
@@ -22,40 +20,6 @@ void throw() {
 }
 
 static FILE *fpout;
-static int buffer_len;
-static char *buffer = NULL;
-static char *buffer_ptr;
-
-void init_buffer() {
-    if(buffer != NULL) {
-        free(buffer);
-    }
-    buffer = buffer_ptr = (char *)xalloc(INIT_STRING_LENGTH);
-    buffer_len = INIT_STRING_LENGTH;
-}
-
-void append_buffer(char ch) {
-    char *tmp;
-
-    if(buffer_ptr - buffer >= buffer_len - 1) {
-        tmp = buffer;
-        buffer = (char *)xalloc(buffer_len * 2);
-        memcpy(buffer, tmp, (buffer_ptr - tmp) * sizeof(char));
-        buffer_ptr = buffer + buffer_len - 1;
-        buffer_len *= 2;
-        free(tmp);
-    }
-    *buffer_ptr++ = ch;
-}
-
-char *to_string_buffer() {
-    char *result;
-
-    append_buffer('\0');
-    result = (char *)xalloc(buffer_ptr - buffer);
-    strcpy(result, buffer);
-    return result;
-}
 
 typedef struct list {
     char *value;
@@ -67,7 +31,7 @@ static line_list *list = NULL;
 static line_list *list_ptr;
 static line_list *prev_list = NULL;
 static line_list *prev_list_ptr;
-static char separator = ':';
+static char separator = '\t';
 static char index_prefix = '#';
 
 void push_list(char *str) {
@@ -112,13 +76,18 @@ int is_continue(char *current, char *prev) {
     if((current_index_ptr = get_array_index(current)) != NULL && (prev_index_ptr = get_array_index(prev)) != NULL) {
         sscanf(current_index_ptr, "%d", &current_index);
         sscanf(prev_index_ptr, "%d", &prev_index);
+        if(current_index < prev_index) {
+            // first occurence of array index must be ascending.
+            fprintf(stderr, "malformed flatj format\n");
+            throw();
+        }
         return current_index == prev_index;
     } else {
         return strcmp(current, prev) == 0;
     }
 }
 
-int string_suffix = '!';
+int string_suffix = -1;
 enum state_check_number {
     CHECK_NUMBER_INIT,
     CHECK_NUMBER_NUMBER_START,
@@ -259,7 +228,6 @@ void print_value(char *value) {
         free(string_value);
     } else {
         fprintf(stderr, "malformed string format\n");
-        fprintf(fpout, "\n");
         throw();
     }
 }
@@ -286,11 +254,13 @@ void print_line() {
         fprintf(fpout, ",");
         bracket = 0;
 
+        // check case of
+        // key:value1
+        // key:value2
         if(((current_ptr->prev != NULL && get_array_index(current_ptr->prev->value) == NULL) ||
                 (prev_ptr->prev != NULL && get_array_index(prev_ptr->prev->value) == NULL)) &&
                 (current_ptr->next == NULL || prev_ptr->next == NULL)) {
             fprintf(stderr, "malformed flatj format\n");
-            fprintf(fpout, "\n");
             throw();
         }
     } else {

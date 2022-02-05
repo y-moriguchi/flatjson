@@ -14,8 +14,6 @@
 #include <setjmp.h>
 #include "../common.h"
 
-#define INIT_STRING_LENGTH 20
-
 static FILE *fpout;
 
 int parse_json(FILE *fp);
@@ -52,71 +50,6 @@ char *literal_to_string(char *literal) {
     return result;
 }
 
-static int buffer_len;
-static char *buffer = NULL;
-static char *buffer_ptr;
-
-void init_buffer() {
-    if(buffer != NULL) {
-        free(buffer);
-    }
-    buffer = buffer_ptr = (char *)xalloc(INIT_STRING_LENGTH);
-    buffer_len = INIT_STRING_LENGTH;
-}
-
-void append_buffer(char ch) {
-    char *tmp;
-
-    if(buffer_ptr - buffer >= buffer_len - 1) {
-        tmp = buffer;
-        buffer = (char *)xalloc(buffer_len * 2);
-        memcpy(buffer, tmp, (buffer_ptr - tmp) * sizeof(char));
-        buffer_ptr = buffer + buffer_len - 1;
-        buffer_len *= 2;
-        free(tmp);
-    }
-    *buffer_ptr++ = ch;
-}
-
-int equals_buffer(const char *str) {
-    int result;
-
-    append_buffer('\0');
-    result = strcmp(buffer, str);
-    buffer_ptr--;
-    return !result;
-}
-
-char *to_string_buffer() {
-    char *result;
-
-    append_buffer('\0');
-    result = (char *)xalloc(buffer_ptr - buffer);
-    strcpy(result, buffer);
-    return result;
-}
-
-void append_codepoint_buffer(int codepoint) {
-    if(codepoint < 0x80) {
-        append_buffer((char)codepoint);
-    } else if(codepoint < 0x800) {
-        append_buffer(0xd0 | (codepoint >> 6));
-        append_buffer(0x80 | (codepoint & 0x03f));
-    } else if(codepoint < 0x10000) {
-        append_buffer(0xe0 | (codepoint >> 12));
-        append_buffer(0x80 | ((codepoint >> 6) & 0x3f));
-        append_buffer(0x80 | (codepoint & 0x3f));
-    } else if(codepoint < 0x110000) {
-        append_buffer(0xf0 | (codepoint >> 18));
-        append_buffer(0x80 | ((codepoint >> 12) & 0x3f));
-        append_buffer(0x80 | ((codepoint >> 6) & 0x3f));
-        append_buffer(0x80 | (codepoint & 0x3f));
-    } else {
-        fprintf(stderr, "invalid codepoint\n");
-        throw();
-    }
-}
-
 typedef struct list {
     char *value;
     struct list *next;
@@ -125,7 +58,7 @@ typedef struct list {
 
 static stack_list *stack = NULL;
 static stack_list *stack_ptr;
-static char separator = ':';
+static char separator = '\t';
 
 void print_stack(FILE *fpout) {
     stack_list *p;
@@ -189,7 +122,7 @@ int nextcharline(FILE *fp) {
     return ch;
 }
 
-static int suffix_char = '!';
+static int suffix_char = -1;
 static int expand_escape = 0;
 enum state_parse_string {
     PARSE_STRING_INIT,
@@ -292,7 +225,10 @@ char *parse_string(FILE *fp, int suffix) {
                 if(surrogate) {
                     if(codepoint >= 0xDC00 && codepoint <= 0xDFFF) {
                         if(expand_escape) {
-                            append_codepoint_buffer(surrogate_to_codepoint(surrogate, codepoint));
+                            if(!append_codepoint_buffer(surrogate_to_codepoint(surrogate, codepoint))) {
+                                fprintf(stderr, "invalid codepoint\n");
+                                throw();
+                            }
                         }
                         surrogate = 0;
                     } else {
@@ -303,7 +239,10 @@ char *parse_string(FILE *fp, int suffix) {
                     if(codepoint >= 0xD800 && codepoint <= 0xDCFF) {
                         surrogate = codepoint;
                     } else if(expand_escape) {
-                        append_codepoint_buffer(codepoint);
+                        if(!append_codepoint_buffer(codepoint)) {
+                            fprintf(stderr, "invalid codepoint\n");
+                            throw();
+                        }
                     }
                 }
                 ungetc(ch, fp);

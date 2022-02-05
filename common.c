@@ -12,6 +12,8 @@
 #include <ctype.h>
 #include "common.h"
 
+#define INIT_STRING_LENGTH 20
+
 void *xalloc(int size) {
     void *result;
 
@@ -20,6 +22,71 @@ void *xalloc(int size) {
         exit(EXIT_ERROR);
     }
     return result;
+}
+
+static int buffer_len;
+static char *buffer = NULL;
+static char *buffer_ptr;
+
+void init_buffer() {
+    if(buffer != NULL) {
+        free(buffer);
+    }
+    buffer = buffer_ptr = (char *)xalloc(INIT_STRING_LENGTH);
+    buffer_len = INIT_STRING_LENGTH;
+}
+
+void append_buffer(char ch) {
+    char *tmp;
+
+    if(buffer_ptr - buffer >= buffer_len - 1) {
+        tmp = buffer;
+        buffer = (char *)xalloc(buffer_len * 2);
+        memcpy(buffer, tmp, (buffer_ptr - tmp) * sizeof(char));
+        buffer_ptr = buffer + buffer_len - 1;
+        buffer_len *= 2;
+        free(tmp);
+    }
+    *buffer_ptr++ = ch;
+}
+
+int equals_buffer(const char *str) {
+    int result;
+
+    append_buffer('\0');
+    result = strcmp(buffer, str);
+    buffer_ptr--;
+    return !result;
+}
+
+char *to_string_buffer() {
+    char *result;
+
+    append_buffer('\0');
+    result = (char *)xalloc(buffer_ptr - buffer);
+    strcpy(result, buffer);
+    return result;
+}
+
+int append_codepoint_buffer(int codepoint) {
+    if(codepoint < 0x80) {
+        append_buffer((char)codepoint);
+    } else if(codepoint < 0x800) {
+        append_buffer(0xd0 | (codepoint >> 6));
+        append_buffer(0x80 | (codepoint & 0x03f));
+    } else if(codepoint < 0x10000) {
+        append_buffer(0xe0 | (codepoint >> 12));
+        append_buffer(0x80 | ((codepoint >> 6) & 0x3f));
+        append_buffer(0x80 | (codepoint & 0x3f));
+    } else if(codepoint < 0x110000) {
+        append_buffer(0xf0 | (codepoint >> 18));
+        append_buffer(0x80 | ((codepoint >> 12) & 0x3f));
+        append_buffer(0x80 | ((codepoint >> 6) & 0x3f));
+        append_buffer(0x80 | (codepoint & 0x3f));
+    } else {
+        return 0;
+    }
+    return 1;
 }
 
 char *get_delimiter_arg(int argc, char *argv[], char *arg_string, void (*usage)(), int *argindex) {
