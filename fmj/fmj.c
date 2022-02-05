@@ -29,13 +29,16 @@ void writech(int ch) {
 
 static int indent = 0;
 static int indent_size = 2;
+static int pretty = 1;
 
 void print_indent() {
     int i;
 
-    writech('\n');
-    for(i = 0; i < indent; i++) {
-        writech(' ');
+    if(pretty) {
+        writech('\n');
+        for(i = 0; i < indent; i++) {
+            writech(' ');
+        }
     }
 }
 
@@ -550,7 +553,7 @@ void parse_json_root(FILE *fp) {
 }
 
 void usage() {
-    fprintf(stderr, "usage: fmj [-E] [-o output] [input]\n");
+    fprintf(stderr, "usage: fmj [-m] [-o output] [input]\n");
     exit(EXIT_USAGE);
 }
 
@@ -567,6 +570,9 @@ int main(int argc, char *argv[]) {
             }
             outfile = argv[argindex + 1];
             argindex += 2;
+        } else if(strcmp(argv[argindex], "-m") == 0) {
+            pretty = 0;
+            argindex++;
         } else if(argv[argindex][0] == '-') {
             usage();
         } else {
