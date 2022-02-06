@@ -13,7 +13,7 @@ $ cat e001.json
 { "key1": [ true, false, null ],
   "key2": { "key3": "string", "key4": "another" }}
 
-$ flatj e001.json
+$ flatj -F':' -s'!' e001.json
 key1:#0:true
 key1:#1:false
 key1:#2:null
@@ -34,7 +34,7 @@ key1:#2:null
 key2:key3:string!
 key2:key4:another!
 
-$ dflatj e001.flatj
+$ dflatj -F':' -s'!' e001.flatj
 {"key1":[true,false,null],"key2":{"key3":"string","key4":"another"}}
 ```
 ### fmj
